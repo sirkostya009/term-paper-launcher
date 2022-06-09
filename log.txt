@@ -1,4 +1,0 @@
-checking if git exists
-checking if java exists
-checking if gaem directory exists...
-java Main
