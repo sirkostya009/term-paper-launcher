@@ -9,6 +9,7 @@ use egui::{Button, Color32, Vec2, Visuals};
 
 const GIT_LINK:&str   = "https://github.com/git-for-windows/git/releases/download/v2.36.1.windows.1/Git-2.36.1-64-bit.exe";
 const JRE_LINK:&str   = "https://download.bell-sw.com/java/18.0.1.1+2/bellsoft-jre18.0.1.1+2-windows-amd64-full.msi";
+const VERSION:&str    = "18.0.1.1+2";
 const REPOSITORY:&str = "https://github.com/sirkostya009/java-sources";
 const DIRECTORY:&str  = "java-sources";
 
@@ -35,9 +36,12 @@ impl LauncherApp {
     }
 
     fn check_for(&mut self, what: &str) -> bool {
-        self.log(format!("checking if {what} exists"));
+        self.log(format!("checking if {what} exists... ").as_bytes());
 
-        !matches!(Command::new(what).output(), Err(_e))
+        let result = !matches!(Command::new(what).output(), Err(_e));
+        self.log(format!("{result}\n").as_bytes());
+
+        result
     }
 
     pub fn check_for_git(&mut self) -> bool {
@@ -45,56 +49,114 @@ impl LauncherApp {
     }
 
     pub fn check_for_java(&mut self) -> bool {
-        self.check_for("java")
+        let mut result = self.check_for("java");
+
+        if result {
+            let output = String::from_utf8(Command::new("java").arg("--version")
+                .output()
+                .unwrap()
+                .stdout)
+                .unwrap();
+
+            result &= output.contains(VERSION); // checks if exactly the same version of jre is installed,
+        }                                           // otherwise you'll need to install the one required
+
+        result
     }
 
     pub fn check_directory(&mut self) -> bool {
-        self.log("checking if gaem directory exists...".to_string());
+        self.log("checking if gaem directory exists...".as_bytes());
 
-        Path::new(DIRECTORY).exists()
+        let mut result = true;
+
+        if !Path::new(DIRECTORY).exists() {
+            result = false;
+        }
+
+        if !self.check_for_git() {
+            result = false;
+        }
+
+        if result {
+            result = String::from_utf8(Command::new("git")
+                .current_dir(DIRECTORY)
+                .arg("status")
+                .output()
+                .unwrap().stdout)
+                .unwrap()
+                .contains(&"up to date");
+
+            if !result {
+                Command::new("git")
+                    .current_dir(DIRECTORY)
+                    .arg("pull")
+                    .output()
+            }
+        }
+
+        self.log(format!("{result}\n").as_bytes());
+        result
     }
 
     pub fn clone_repository(&mut self) {
-        self.log("cloning gaem...\n".to_string());
-        std::thread::spawn(|| {
-            Command::new("git")
-                .args(["clone", REPOSITORY])
-                .output()
-                .expect("failed to clone from remote repository")
-        });
+        self.log("cloning gaem...\n".as_bytes());
+        std::thread::spawn(|| Command::new("git")
+            .args(["clone", REPOSITORY])
+            .output()
+            .expect("failed to clone from remote repository")
+        );
     }
 
     fn download_and_install(&mut self, what: &'static &str, link: &'static &str) {
-        self.log(format!("downloading and installing {what}"));
-
+        let mut log = self.log.try_clone().unwrap();
         std::thread::spawn(move || {
+            log.write_all(format!("downloading {what}\n").as_bytes());
             Command::new("curl")
                 .args(["-O", link])
                 .output()
-                .unwrap_or_else(|_| panic!("failed to download {what}"));
+                .unwrap_or_else(|err| {
+                    let msg = format!("failed to download {what}, {err}\n");
+                    log.write_all(msg.as_bytes());
+                    panic!("{msg}")
+                });
 
-            let program_name = link.split('/').last().unwrap();
+            let setup = format!("{}", link.split('/').last().unwrap());
+            let path = Path::new(setup.as_str()).extension().unwrap();
 
-            Command::new(program_name)
-                .arg("/quiet")
-                .output()
-                .unwrap_or_else(|_| panic!("failed to install {what}"));
+            log.write_all(format!("installing {what}\n").as_bytes());
+            let handle = |err| {
+                let msg = format!("failed to install {what}, {err}\n");
+                log.write_all(msg.as_bytes());
+                panic!("{msg}")
+            };
+
+            if path == "msi" {
+                Command::new("msiexec")
+                    .args(["/i", setup.as_str()])
+                    .output()
+                    .unwrap_or_else(handle);
+            } else if path == "exe" {
+                Command::new(setup)
+                    .arg("/VERYSILENT")
+                    .output()
+                    .unwrap_or_else(handle);
+            }
         });
+
+        self.restart_required = true;
     }
 
     pub fn download_and_install_jre(&mut self) {
         self.download_and_install(&"jre",&JRE_LINK);
-        self.restart_required = true;
     }
 
     pub fn download_and_install_git(&mut self) {
         self.download_and_install(&"git",&GIT_LINK);
     }
 
-    pub fn log(&mut self, mut info: String) {
-        info.push('\n');
-        self.log.write_all(info.as_bytes())
-            .unwrap_or_else(|_| panic!("failed to log {:?}", info));
+    pub fn log(&mut self, info: &[u8]) {
+        self.log.write_all(info)
+            .unwrap_or_else(|err| panic!("failed to log {info:?}, {err}"))
     }
 }
 
@@ -107,11 +169,11 @@ impl eframe::App for LauncherApp {
                 if ui.add_sized(Vec2::new(160f32,50f32),Button::new("Run")).clicked() {
                     if self.runnable {
                         self.log.write_all(b"java Main\n").unwrap();
-                        Command::new("java")
+                        std::thread::spawn(||Command::new("java")
                             .current_dir(format!("./{DIRECTORY}/"))
                             .arg("Main")
                             .output()
-                            .expect("java Main failed");
+                            .expect("java Main failed"));
                     } else {
                         if !self.check_for_git() {
                             self.download_and_install_git();
@@ -128,11 +190,11 @@ impl eframe::App for LauncherApp {
                 ui.add_space(10f32);
 
                 if self.restart_required {
-                    ui.label(egui::RichText::new("system restart required").color(Color32::RED));
+                    ui.label(egui::RichText::new("program restart required").color(Color32::RED));
                 } else if self.runnable {
                     ui.label("Ready");
                 } else {
-                    ui.label(self.status.to_string());
+                    ui.label(self.status.as_str());
                 }
             })
         });
