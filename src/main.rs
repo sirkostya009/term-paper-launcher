@@ -85,13 +85,6 @@ impl LauncherApp {
                 .unwrap().stdout)
                 .unwrap()
                 .contains(&"up to date");
-
-            if !result {
-                Command::new("git")
-                    .current_dir(DIRECTORY)
-                    .arg("pull")
-                    .output()
-            }
         }
 
         self.log(format!("{result}\n").as_bytes());
@@ -120,8 +113,8 @@ impl LauncherApp {
                     panic!("{msg}")
                 });
 
-            let setup = format!("{}", link.split('/').last().unwrap());
-            let path = Path::new(setup.as_str()).extension().unwrap();
+            let setup = link.split('/').last().unwrap();
+            let path = Path::new(setup).extension().unwrap();
 
             log.write_all(format!("installing {what}\n").as_bytes());
             let handle = |err| {
@@ -132,7 +125,7 @@ impl LauncherApp {
 
             if path == "msi" {
                 Command::new("msiexec")
-                    .args(["/i", setup.as_str()])
+                    .args(["/i", setup])
                     .output()
                     .unwrap_or_else(handle);
             } else if path == "exe" {
