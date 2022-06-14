@@ -4,6 +4,7 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
+use std::sync::mpsc::{Receiver, Sender};
 use eframe::{CreationContext, run_native};
 use egui::{Button, Color32, Vec2, Visuals};
 
@@ -18,17 +19,23 @@ struct LauncherApp {
     runnable: bool,
     restart_required: bool,
     log: File,
+    receiver: Receiver<String>,
+    sender: Sender<String>
 }
 
 impl LauncherApp {
     fn new(cc: &CreationContext) -> LauncherApp {
         cc.egui_ctx.set_visuals(Visuals::dark());
 
+        let (s, r) = std::sync::mpsc::channel();
+
         let mut app = LauncherApp {
             status: "Standby".to_string(),
             runnable: false,
             restart_required: false,
             log: File::create("log.txt").unwrap(),
+            receiver: r,
+            sender: s
         };
         app.runnable = app.check_for_git() && app.check_for_java() && app.check_directory();
 
@@ -36,10 +43,10 @@ impl LauncherApp {
     }
 
     fn check_for(&mut self, what: &str) -> bool {
-        self.log(format!("checking if {what} exists... ").as_bytes());
+        self.sender.send(format!("checking if {what} exists... ")).unwrap();
 
         let result = !matches!(Command::new(what).output(), Err(_e));
-        self.log(format!("{result}\n").as_bytes());
+        self.sender.send(format!("{what} is {}available", if result { "" } else { "not " })).unwrap();
 
         result
     }
@@ -65,7 +72,7 @@ impl LauncherApp {
     }
 
     pub fn check_directory(&mut self) -> bool {
-        self.log("checking if gaem directory exists...".as_bytes());
+        self.sender.send(String::from("checking if gaem directory exists...")).unwrap();
 
         let mut result = true;
 
@@ -87,12 +94,12 @@ impl LauncherApp {
                 .contains(&"up to date");
         }
 
-        self.log(format!("{result}\n").as_bytes());
+        self.sender.send((if result { "directory exists!" } else { "directory does not exist" }).to_string()).unwrap();
         result
     }
 
     pub fn clone_repository(&mut self) {
-        self.log("cloning gaem...\n".as_bytes());
+        self.sender.send(String::from("cloning gaem...")).unwrap();
         std::thread::spawn(|| Command::new("git")
             .args(["clone", REPOSITORY])
             .output()
@@ -101,25 +108,26 @@ impl LauncherApp {
     }
 
     fn download_and_install(&mut self, what: &'static &str, link: &'static &str) {
-        let mut log = self.log.try_clone().unwrap();
+        let sender = self.sender.clone();
+
         std::thread::spawn(move || {
-            log.write_all(format!("downloading {what}\n").as_bytes());
+            sender.send(format!("downloading {what}")).unwrap();
             Command::new("curl")
                 .args(["-O", link])
                 .output()
                 .unwrap_or_else(|err| {
                     let msg = format!("failed to download {what}, {err}\n");
-                    log.write_all(msg.as_bytes());
+                    sender.send(msg.clone()).unwrap();
                     panic!("{msg}")
                 });
 
             let setup = link.split('/').last().unwrap();
             let path = Path::new(setup).extension().unwrap();
 
-            log.write_all(format!("installing {what}\n").as_bytes());
+            sender.send(format!("installing {what}\n")).unwrap();
             let handle = |err| {
                 let msg = format!("failed to install {what}, {err}\n");
-                log.write_all(msg.as_bytes());
+                sender.send(msg.clone()).unwrap();
                 panic!("{msg}")
             };
 
@@ -147,9 +155,13 @@ impl LauncherApp {
         self.download_and_install(&"git",&GIT_LINK);
     }
 
-    pub fn log(&mut self, info: &[u8]) {
-        self.log.write_all(info)
-            .unwrap_or_else(|err| panic!("failed to log {info:?}, {err}"))
+    fn poll_status(&mut self) {
+        if let Ok(s) = self.receiver.try_recv() {
+            self.status = s;
+            self.status.push('\n');
+            self.log.write_all(self.status.as_bytes())
+                .unwrap_or_else(|err| panic!("failed to log {:?}, {err}", self.status))
+        }
     }
 }
 
@@ -180,14 +192,16 @@ impl eframe::App for LauncherApp {
                     }
                 }
 
+                self.poll_status();
+
                 ui.add_space(10f32);
+
+                ui.label(self.status.as_str());
 
                 if self.restart_required {
                     ui.label(egui::RichText::new("program restart required").color(Color32::RED));
                 } else if self.runnable {
-                    ui.label("Ready");
-                } else {
-                    ui.label(self.status.as_str());
+                    self.sender.send("Ready".to_string()).unwrap();
                 }
             })
         });
