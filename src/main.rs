@@ -18,7 +18,6 @@ struct LauncherApp {
     status: String,
     runnable: bool,
     restart_required: bool,
-    log: File,
     receiver: Receiver<String>,
     sender: Sender<String>
 }
@@ -33,7 +32,6 @@ impl LauncherApp {
             status: "Standby".to_string(),
             runnable: false,
             restart_required: false,
-            log: File::create("log.txt").unwrap(),
             receiver: r,
             sender: s
         };
@@ -116,7 +114,7 @@ impl LauncherApp {
                 .args(["-O", link])
                 .output()
                 .unwrap_or_else(|err| {
-                    let msg = format!("failed to download {what}, {err}\n");
+                    let msg = format!("failed to download {what}, {err}");
                     sender.send(msg.clone()).unwrap();
                     panic!("{msg}")
                 });
@@ -124,9 +122,9 @@ impl LauncherApp {
             let setup = link.split('/').last().unwrap();
             let path = Path::new(setup).extension().unwrap();
 
-            sender.send(format!("installing {what}\n")).unwrap();
+            sender.send(format!("installing {what}")).unwrap();
             let handle = |err| {
-                let msg = format!("failed to install {what}, {err}\n");
+                let msg = format!("failed to install {what}, {err}");
                 sender.send(msg.clone()).unwrap();
                 panic!("{msg}")
             };
@@ -158,9 +156,6 @@ impl LauncherApp {
     fn poll_status(&mut self) {
         if let Ok(s) = self.receiver.try_recv() {
             self.status = s;
-            self.status.push('\n');
-            self.log.write_all(self.status.as_bytes())
-                .unwrap_or_else(|err| panic!("failed to log {:?}, {err}", self.status))
         }
     }
 }
@@ -173,7 +168,6 @@ impl eframe::App for LauncherApp {
             ui.vertical_centered(|ui| {
                 if ui.add_sized(Vec2::new(160f32,50f32),Button::new("Run")).clicked() {
                     if self.runnable {
-                        self.log.write_all(b"java Main\n").unwrap();
                         std::thread::spawn(||Command::new("java")
                             .current_dir(format!("./{DIRECTORY}/"))
                             .arg("Main")
