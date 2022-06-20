@@ -1,8 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 
-use std::fs::File;
-use std::io::Write;
 use std::path::Path;
+use std::os::windows::process::CommandExt;
 use std::process::Command;
 use std::sync::mpsc::{Receiver, Sender};
 use eframe::{CreationContext, run_native};
@@ -19,7 +18,7 @@ struct LauncherApp {
     runnable: bool,
     restart_required: bool,
     receiver: Receiver<String>,
-    sender: Sender<String>
+    sender: Sender<String>,
 }
 
 impl LauncherApp {
@@ -43,7 +42,7 @@ impl LauncherApp {
     fn check_for(&mut self, what: &str) -> bool {
         self.sender.send(format!("checking if {what} exists... ")).unwrap();
 
-        let result = !matches!(Command::new(what).output(), Err(_e));
+        let result = !matches!(Command::new(what).creation_flags(0x08000000).output(), Err(_e));
         self.sender.send(format!("{what} is {}available", if result { "" } else { "not " })).unwrap();
 
         result
@@ -58,6 +57,7 @@ impl LauncherApp {
 
         if result {
             let output = String::from_utf8(Command::new("java").arg("--version")
+                .creation_flags(0x08000000)
                 .output()
                 .unwrap()
                 .stdout)
@@ -82,23 +82,35 @@ impl LauncherApp {
             result = false;
         }
 
-        if result {
-            result = String::from_utf8(Command::new("git")
-                .current_dir(DIRECTORY)
-                .arg("status")
-                .output()
-                .unwrap().stdout)
-                .unwrap()
-                .contains(&"up to date");
+        self.sender.send((if result { "directory exists!" } else { "directory does not exist" }).to_string()).unwrap();
+        if !result { return result }
+
+        result = String::from_utf8(Command::new("git")
+            .creation_flags(0x08000000)
+            .current_dir(DIRECTORY)
+            .arg("status")
+            .output()
+            .unwrap().stdout)
+            .unwrap()
+            .contains(&"up to date");
+
+        self.sender.send(format!("directory is {}up to date", if result { "" } else { "not " })).unwrap();
+        if !result && Command::new("git")
+            .creation_flags(0x08000000)
+            .current_dir(DIRECTORY)
+            .arg("pull")
+            .output().is_ok()
+        {
+            result = true
         }
 
-        self.sender.send((if result { "directory exists!" } else { "directory does not exist" }).to_string()).unwrap();
         result
     }
 
     pub fn clone_repository(&mut self) {
         self.sender.send(String::from("cloning gaem...")).unwrap();
         std::thread::spawn(|| Command::new("git")
+            .creation_flags(0x08000000)
             .args(["clone", REPOSITORY])
             .output()
             .expect("failed to clone from remote repository")
@@ -111,6 +123,7 @@ impl LauncherApp {
         std::thread::spawn(move || {
             sender.send(format!("downloading {what}")).unwrap();
             Command::new("curl")
+                .creation_flags(0x08000000)
                 .args(["-O", link])
                 .output()
                 .unwrap_or_else(|err| {
@@ -120,7 +133,7 @@ impl LauncherApp {
                 });
 
             let setup = link.split('/').last().unwrap();
-            let path = Path::new(setup).extension().unwrap();
+            let extension = Path::new(setup).extension().unwrap();
 
             sender.send(format!("installing {what}")).unwrap();
             let handle = |err| {
@@ -129,13 +142,15 @@ impl LauncherApp {
                 panic!("{msg}")
             };
 
-            if path == "msi" {
+            if extension == "msi" {
                 Command::new("msiexec")
+                    .creation_flags(0x08000000)
                     .args(["/i", setup])
                     .output()
                     .unwrap_or_else(handle);
-            } else if path == "exe" {
+            } else if extension == "exe" {
                 Command::new(setup)
+                    .creation_flags(0x08000000)
                     .arg("/VERYSILENT")
                     .output()
                     .unwrap_or_else(handle);
@@ -170,6 +185,7 @@ impl eframe::App for LauncherApp {
                     if self.runnable {
                         std::thread::spawn(||Command::new("java")
                             .current_dir(format!("./{DIRECTORY}/"))
+                            .creation_flags(0x08000000)
                             .arg("Main")
                             .output()
                             .expect("java Main failed"));
