@@ -13,7 +13,7 @@ use winapi::um::winbase::CREATE_NO_WINDOW;
 
 const JRE_LINK:&str = "https://download.bell-sw.com/java/18.0.1.1+2/bellsoft-jre18.0.1.1+2-windows-amd64-full.msi";
 const SETUP:&str    = "bellsoft-jre18.0.1.1+2-windows-amd64-full.msi";
-const GAEM_LINK:&str= "https://github.com/sirkostya009/term-paper/releases/download/third-release/term-paper.jar";
+const GAEM_LINK:&str= "https://github.com/sirkostya009/term-paper/releases/download/fourth-release/term-paper.jar";
 const JAR_NAME:&str = "term-paper.jar";
 
 fn path() -> String {
